@@ -83,6 +83,15 @@
       text: "You’ve just taken over. Leela walks in with an adapter. Work out what was outstanding from the screening and close the loan for the right item.",
     },
   ];
+  // Hours since Friday midnight, so shift times and due times can be compared.
+  const phaseAt = [15.75, 19.5, 33];
+  const dueAt = {
+    "Fri 8 pm": 20,
+    "Sat 9 am": 33,
+    "Sat 10 am": 34,
+    "Sat noon": 36,
+  };
+  const dueList = Object.keys(dueAt);
   const pages = [
     ["Requests", "clipboard-list"],
     ["Inventory", "package"],
@@ -90,10 +99,11 @@
     ["Desk book", "messages-square"],
   ];
   const original = () => ({
-    version: 1,
+    version: 2,
     tab: "Requests",
     phase: 0,
     selected: "",
+    mode: "",
     filter: "All items",
     loans: [
       {
@@ -101,19 +111,43 @@
         req: "RQ-209",
         asset: "MI-09",
         who: "Tara Shah",
+        holder: "Tara Shah",
         due: "Sat 10 am",
         back: false,
+        log: [
+          {
+            at: "Friday · 3:30 pm",
+            t: 15.5,
+            kind: "issued",
+            text: "Issued to Tara Shah. Due Sat 10 am.",
+          },
+        ],
       },
     ],
     notes: [],
     editing: false,
     onlyOpen: true,
+    lookup: "",
+    undo: null,
     notice: "Sample shift · All records are fictional.",
   });
   let s = original();
   const getAsset = (id) => assets.find((x) => x.id === id);
   const getReq = (id) => requests.find((x) => x.id === id);
   const out = (id) => s.loans.find((l) => l.asset === id && !l.back);
+  const now = () => phaseAt[s.phase];
+  const stamp = () => ({ at: shifts[s.phase].time, t: now() });
+  const overdue = (l) => !l.back && now() > dueAt[l.due];
+  const lateExpected = (l) =>
+    !l.back && !overdue(l) && l.expected && dueAt[l.expected] > dueAt[l.due];
+  const reqLoans = (id) => s.loans.filter((l) => l.req === id);
+  const kit = (r) =>
+    r.items.map((type) => {
+      const ls = reqLoans(r.id).filter(
+        (l) => getAsset(l.asset).type === type,
+      );
+      return { type, loan: ls.find((l) => !l.back) || ls[ls.length - 1] };
+    });
   const esc = (x) =>
     String(x).replace(
       /[&<>"']/g,
@@ -126,10 +160,29 @@
           "'": "&#39;",
         })[c],
     );
-  const opts = (list) =>
+  const opts = (list, value = "") =>
     list
-      .map(([v, t]) => '<option value="' + esc(v) + '">' + esc(t) + "</option>")
+      .map(
+        ([v, t]) =>
+          '<option value="' +
+          esc(v) +
+          '"' +
+          (v === value ? " selected" : "") +
+          ">" +
+          esc(t) +
+          "</option>",
+      )
       .join("");
+  const field = (label, key, options, value = "", blank = "Select…") =>
+    "<label><span>" +
+    esc(label) +
+    '</span><select name="' +
+    key +
+    '"><option value="">' +
+    esc(blank) +
+    "</option>" +
+    opts(options, value) +
+    "</select></label>";
   const btn = (label, act, val = "", style = "") =>
     '<button type="button" data-action="' +
     act +
@@ -156,44 +209,340 @@
     "</small></div><div>" +
     right +
     "</div></div>";
-  const badge = (t, good = false) =>
-    '<span class="tag' + (good ? " good" : "") + '">' + esc(t) + "</span>";
+  const badge = (t, style = "") =>
+    '<span class="tag ' + style + '">' + esc(t) + "</span>";
+  const loanTags = (l) =>
+    l.back
+      ? badge("Returned", "good")
+      : (overdue(l) ? badge("Overdue", "warn") : badge("Out")) +
+        (lateExpected(l) ? " " + badge("Back after due", "warn") : "");
+  const whereabouts = (l) =>
+    l.back
+      ? "Returned " +
+        (l.returnedAt || "") +
+        (l.returnedBy ? " by " + l.returnedBy : "")
+      : "With " +
+        l.holder +
+        " · due " +
+        l.due +
+        (l.expected ? " · expected " + l.expected : "");
+  const people_ = people.map((p) => [p, p]);
+  const dues_ = dueList.map((d) => [d, d]);
+
+  function issue(req, asset, who, due) {
+    const num = Math.max(...s.loans.map((l) => l.num)) + 1;
+    s.loans.push({
+      num,
+      req,
+      asset,
+      who,
+      holder: who,
+      due,
+      back: false,
+      log: [
+        {
+          ...stamp(),
+          kind: "issued",
+          text: "Issued to " + who + ". Due " + due + ".",
+        },
+      ],
+    });
+    return num;
+  }
+
+  function kitSummary(r) {
+    const k = kit(r);
+    const issued = k.filter((x) => x.loan).length;
+    const back = k.filter((x) => x.loan && x.loan.back).length;
+    const late = k.filter((x) => x.loan && overdue(x.loan)).length;
+    if (!issued) return "Not issued";
+    if (back === k.length) return "All returned";
+    return (
+      issued -
+      back +
+      " of " +
+      k.length +
+      " out" +
+      (back ? ", " + back + " back" : "") +
+      (issued < k.length ? ", " + (k.length - issued) + " not issued" : "") +
+      (late ? " · " + late + " overdue" : "")
+    );
+  }
+
   function requestPage() {
     let html = head(
       "Approved requests",
       "Student Activities Office · 3 approved forms",
     );
-    if (s.selected) {
-      const r = getReq(s.selected);
+    if (!s.selected)
+      return (
+        html +
+        requests
+          .map((r) =>
+            row(
+              r.event,
+              r.id + " · " + r.club + " · " + kitSummary(r),
+              btn("View kit", "request", r.id),
+            ),
+          )
+          .join("")
+      );
+    const r = getReq(s.selected);
+    const k = kit(r);
+    html +=
+      btn("Back to list", "close") +
+      '<div class="record"><small>' +
+      esc(r.id) +
+      " · Approved</small><h3>" +
+      esc(r.event) +
+      "</h3><p>" +
+      esc(r.club) +
+      " · Filed by " +
+      esc(r.owner) +
+      "</p><p><b>Return by</b> " +
+      esc(r.due) +
+      "</p><p>" +
+      esc(r.note) +
+      '</p></div><h3 class="kithead">Kit · ' +
+      esc(kitSummary(r)) +
+      "</h3>";
+    for (const x of k) {
+      const a = x.loan && getAsset(x.loan.asset);
+      html += row(
+        x.type,
+        x.loan
+          ? a.id +
+              " · " +
+              a.model +
+              " · slip L-" +
+              x.loan.num +
+              " · " +
+              whereabouts(x.loan)
+          : "Not issued",
+        x.loan ? loanTags(x.loan) : badge("Not issued"),
+      );
+    }
+    const open = k.some((x) => x.loan && !x.loan.back);
+    const pending = k.some((x) => !x.loan);
+    if (!s.mode)
       html +=
-        btn("Back to list", "close") +
-        '<div class="record"><small>' +
-        r.id +
-        " · Approved</small><h3>" +
-        r.event +
-        "</h3><p>" +
-        r.club +
-        " · Filed by " +
-        r.owner +
-        "</p><p><b>Return by</b> " +
-        r.due +
-        "</p><p><b>Approved equipment</b></p><ul>" +
-        r.items.map((x) => "<li>" + x + "</li>").join("") +
-        "</ul><p>" +
-        r.note +
-        "</p></div>";
-    } else
-      html += requests
-        .map((r) =>
-          row(
-            r.event,
-            r.id + " · " + r.club,
-            btn("View form", "request", r.id),
-          ),
-        )
-        .join("");
+        '<div class="buttons">' +
+        (pending ? btn("Issue kit", "mode", "issue", "primary") : "") +
+        (open
+          ? btn("Record return", "mode", "return", pending ? "" : "primary")
+          : "") +
+        "</div>";
+    if (s.mode === "issue" && pending) html += issueKitForm(r, k);
+    if (s.mode === "return" && open) html += returnForm(r);
     return html;
   }
+
+  function issueKitForm(r, k) {
+    const pending = k.filter((x) => !x.loan);
+    let html =
+      '<form data-kit data-req="' +
+      esc(r.id) +
+      '" class="panel"><h3>Issue kit</h3><small>Each approved item gets its own slip. Pick the unit you are handing over.</small><div class="form">';
+    pending.forEach((x, i) => {
+      const units = assets.filter(
+        (a) => a.type === x.type && !a.repair && !out(a.id),
+      );
+      html += field(
+        x.type,
+        "unit" + i,
+        units.map((a) => [a.id, a.id + " · " + a.model + " · bin " + a.bin]),
+        units[0] ? units[0].id : "",
+        units.length ? "Leave for later" : "None on the shelf",
+      );
+    });
+    html +=
+      field("Collected by", "who", people_) +
+      field("Return by", "due", dues_, r.due) +
+      '</div><div class="buttons"><button type="submit" class="primary">Save issue slips</button>' +
+      btn("Cancel", "mode", "") +
+      "</div></form>";
+    return html;
+  }
+
+  // The time the current holder took responsibility for the unit.
+  const holderSince = (l) =>
+    l.log.filter((e) => e.kind === "issued" || e.kind === "transfer").pop()
+      .at;
+  // "Portable speaker" reads as "portable speaker" mid-sentence; "HDMI projector" stays.
+  const lower = (t) => (/^[A-Z][a-z]/.test(t) ? t[0].toLowerCase() + t.slice(1) : t);
+  // Turns what staff type from a label ("ad12", "AD 12") into a unit ID.
+  const unitId = (raw) => {
+    const m = String(raw)
+      .toUpperCase()
+      .replace(/\s+/g, "")
+      .match(/^([A-Z]{2})-?(\d{1,2})$/);
+    return m ? m[1] + "-" + m[2].padStart(2, "0") : String(raw).trim();
+  };
+
+  function returnForm(r, only = null) {
+    const open = reqLoans(r.id).filter(
+      (l) => !l.back && (!only || l.num === only.num),
+    );
+    let html =
+      '<form data-return data-req="' +
+      esc(r.id) +
+      '" data-via="' +
+      (only ? "unit" : "slip") +
+      '" class="panel">' +
+      (only
+        ? ""
+        : "<h3>Record return</h3><small>Tick each unit that is on the counter, and check its label against the ID. For anything still out, record who has it now.</small>");
+    for (const l of open) {
+      const a = getAsset(l.asset);
+      // Matched by unit ID: the unit is in hand, so there is nothing to tick.
+      if (only) {
+        html += '<input type="hidden" name="back" value="' + l.num + '" />';
+        continue;
+      }
+      html +=
+        '<fieldset class="unit"><label class="check"><input type="checkbox" name="back" value="' +
+        l.num +
+        '" /><span><strong>' +
+        esc(a.id + " · " + a.type) +
+        "</strong><small>" +
+        esc(
+          a.model +
+            " · bin " +
+            a.bin +
+            " · slip L-" +
+            l.num +
+            " · " +
+            whereabouts(l),
+        ) +
+        "</small></span>" +
+        loanTags(l) +
+        '</label><div class="form stillwith">' +
+        field("Not on the counter: now with", "with-" + l.num, people_, l.holder) +
+        field("Expected back", "exp-" + l.num, dues_, l.expected || "", "Not known") +
+        "</div></fieldset>";
+    }
+    html +=
+      '<div class="form">' +
+      field("Returned by", "by", people_, only ? only.holder : "") +
+      '</div><div class="buttons"><button type="submit" class="primary">Save return</button>' +
+      (only ? btn("Clear", "clearlookup") : btn("Cancel", "mode", "")) +
+      "</div></form>";
+    return html;
+  }
+
+  // Typing "AD" lists every adapter with where it should be, units on loan first.
+  function unitSuggestions() {
+    const rank = (a) => (out(a.id) ? 0 : a.repair ? 2 : 1);
+    return (
+      '<datalist id="unit-ids">' +
+      assets
+        .slice()
+        .sort((x, y) => rank(x) - rank(y) || x.id.localeCompare(y.id))
+        .map((a) => {
+          const l = out(a.id);
+          const where = l
+            ? "on loan to " +
+              l.holder +
+              " · L-" +
+              l.num +
+              (overdue(l) ? " · overdue" : "")
+            : a.repair
+              ? "in repair"
+              : "on shelf in " + a.bin;
+          return (
+            '<option value="' +
+            esc(a.id) +
+            '" label="' +
+            esc(a.type + " · " + a.model + " · " + where) +
+            '"></option>'
+          );
+        })
+        .join("") +
+      "</datalist>"
+    );
+  }
+
+  // Start a return from the unit in hand: type the ID printed on its label.
+  function lookupPanel() {
+    let html =
+      '<form data-lookup class="lookup"><label><span>Unit on the counter</span><input name="unit" list="unit-ids" autocomplete="off" spellcheck="false" placeholder="ID on the label, e.g. AD-12" value="' +
+      esc(s.lookup) +
+      '" /></label><button type="submit" class="primary">Find slip</button>' +
+      unitSuggestions() +
+      "</form>";
+    if (!s.lookup) return html;
+    const id = s.lookup;
+    const a = getAsset(id);
+    const l = a && out(id);
+    if (!a)
+      return (
+        html +
+        '<p class="alert">No unit has the ID “' +
+        esc(id) +
+        "”. Read the label again; IDs look like AD-12.</p>"
+      );
+    if (!l) {
+      const same = s.loans.filter(
+        (x) => !x.back && getAsset(x.asset).type === a.type,
+      );
+      return (
+        html +
+        '<p class="alert"><b>' +
+        esc(a.id + " isn’t on loan.") +
+        "</b> " +
+        esc(
+          a.repair
+            ? "It is booked into the " + a.bin + " for repair."
+            : "It should be on the shelf in bin " + a.bin + ".",
+        ) +
+        " " +
+        esc(
+          same.length
+            ? "The open " +
+                lower(a.type) +
+                " slip" +
+                (same.length > 1 ? "s are " : " is ") +
+                same
+                  .map(
+                    (x) =>
+                      "L-" + x.num + " · " + x.asset + " (with " + x.holder + ")",
+                  )
+                  .join(", ") +
+                ". Check whether this is the unit that was lent."
+            : "No " + lower(a.type) + " is out on loan.",
+        ) +
+        "</p>"
+      );
+    }
+    const r = getReq(l.req);
+    return (
+      html +
+      '<div class="found"><small>Matched by unit ID</small><h3>' +
+      esc(a.id + " · " + a.type + " · " + a.model) +
+      "</h3><p>" +
+      esc(
+        "Slip L-" +
+          l.num +
+          " · " +
+          r.id +
+          " " +
+          r.club +
+          " · with " +
+          l.holder +
+          " since " +
+          holderSince(l) +
+          " · due " +
+          l.due +
+          (l.expected ? " · expected " + l.expected : ""),
+      ) +
+      " " +
+      loanTags(l) +
+      "</p>" +
+      returnForm(r, l) +
+      "</div>"
+    );
+  }
+
   function inventory() {
     let html = head(
       "Inventory",
@@ -206,65 +555,86 @@
       ) +
       "</select></label></div>";
     for (const a of assets) {
-      const status = a.repair
-        ? "In repair"
-        : out(a.id)
-          ? "On loan"
-          : "On shelf";
+      const l = out(a.id);
+      const status = a.repair ? "In repair" : l ? "On loan" : "On shelf";
       if (s.filter !== "All items" && s.filter !== status) continue;
       html += row(
         a.id + " · " + a.type,
-        a.model + " · " + a.bin,
-        badge(status, status === "On shelf"),
+        a.model + " · " + a.bin + (l ? " · with " + l.holder : ""),
+        badge(status, status === "On shelf" ? "good" : "") +
+          (l && overdue(l) ? " " + badge("Overdue", "warn") : ""),
       );
     }
     return html;
   }
+
+  function slipRow(l) {
+    const a = getAsset(l.asset);
+    const r = getReq(l.req);
+    return (
+      '<div class="row slip"><div><strong>' +
+      esc("L-" + l.num + " · " + a.id + " · " + a.type) +
+      "</strong><small>" +
+      esc(
+        a.model +
+          " · " +
+          l.req +
+          " " +
+          r.club +
+          " · collected by " +
+          l.who +
+          " · " +
+          whereabouts(l),
+      ) +
+      '</small><details class="history"><summary>History</summary><ol>' +
+      l.log
+        .map(
+          (e) =>
+            "<li><small>" + esc(e.at) + "</small> " + esc(e.text) + "</li>",
+        )
+        .join("") +
+      '</ol></details></div><div class="slipside">' +
+      loanTags(l) +
+      (l.back ? "" : btn("Record return", "returnfor", l.req)) +
+      "</div></div>"
+    );
+  }
+
   function register() {
+    const open = s.loans.filter((l) => !l.back);
+    const late = open.filter(overdue).length;
     let html = head(
       "Loan register",
-      "One slip per physical unit",
+      "One slip per physical unit · " +
+        open.length +
+        " open" +
+        (late ? " · " + late + " overdue" : ""),
       s.editing
         ? btn("Cancel", "cancel")
         : btn("New issue slip", "new", "", "primary"),
     );
     if (s.editing) {
       const available = assets.filter((a) => !a.repair && !out(a.id));
-      const select = (label, key, options) =>
-        "<label><span>" +
-        label +
-        '</span><select name="' +
-        key +
-        '" required><option value="">Select…</option>' +
-        opts(options) +
-        "</select></label>";
       return (
         html +
         '<form data-issue><div class="form">' +
-        select(
+        field(
           "Approved request",
           "req",
           requests.map((r) => [r.id, r.id + " · " + r.club]),
         ) +
-        select(
+        field(
           "Unit leaving the desk",
           "asset",
-          available.map((a) => [a.id, a.id + " · " + a.type]),
+          available.map((a) => [a.id, a.id + " · " + a.type + " · " + a.model]),
         ) +
-        select(
-          "Collected by",
-          "who",
-          people.map((p) => [p, p]),
-        ) +
-        select(
-          "Return by",
-          "due",
-          ["Fri 8 pm", "Sat 9 am", "Sat 10 am", "Sat noon"].map((d) => [d, d]),
-        ) +
+        field("Collected by", "who", people_) +
+        field("Return by", "due", dues_) +
         '</div><button type="submit" class="primary">Save issue slip</button></form>'
       );
     }
     html +=
+      lookupPanel() +
       '<div class="buttons">' +
       ["Outstanding", "All slips"]
         .map(
@@ -282,18 +652,12 @@
     const shown = s.loans
       .filter((l) => !s.onlyOpen || !l.back)
       .slice()
-      .reverse();
+      .sort((x, y) => overdue(y) - overdue(x) || y.num - x.num);
     if (!shown.length) html += "<p>No outstanding slips.</p>";
-    for (const l of shown)
-      html += row(
-        "L-" + l.num + " · " + l.asset,
-        l.req + " · " + l.who + " · Due " + l.due,
-        l.back
-          ? badge("Returned")
-          : btn("Record return", "return", String(l.num)),
-      );
+    for (const l of shown) html += slipRow(l);
     return html;
   }
+
   function deskbook() {
     let html = head(
       "Desk book",
@@ -301,11 +665,13 @@
     );
     const entries = [
       [
+        15.33,
         "Friday · 3:20 pm",
         "Isha Rao · Film Society",
         "Kabir Sen is picking up our whole screening kit. Please issue it in his name. I’m setting up in the courtyard.",
       ],
       [
+        15.5,
         "Friday · 3:30 pm",
         "Tara Shah · Debate Union",
         "Our microphone stays with me overnight. I’ll return it by 10 am Saturday.",
@@ -313,15 +679,37 @@
     ];
     if (s.phase >= 1)
       entries.push([
+        19.5,
         "Friday · 7:30 pm",
         "Kabir Sen · Film Society",
         "I brought the projector and speaker. Leela Das has our adapter. She’ll be at the counter at 9 am tomorrow.",
       ]);
+    for (const l of s.loans)
+      for (const e of l.log)
+        if (e.kind === "transfer")
+          entries.push([
+            e.t,
+            e.at,
+            "Loan register · slip L-" + l.num,
+            e.text,
+            "auto",
+          ]);
     for (const n of s.notes)
-      entries.push([shifts[n.phase].time, "Counter handover", n.text]);
-    for (const [t, author, body] of entries.slice().reverse())
+      entries.push([
+        phaseAt[n.phase],
+        shifts[n.phase].time,
+        "Counter handover",
+        n.text,
+      ]);
+    const sorted = entries
+      .map((e, i) => [e, i])
+      .sort((a, b) => b[0][0] - a[0][0] || b[1] - a[1])
+      .map(([e]) => e);
+    for (const [, t, author, body, kind] of sorted)
       html +=
-        '<article class="record"><small>' +
+        '<article class="record' +
+        (kind ? " " + kind : "") +
+        '"><small>' +
         esc(t) +
         "</small><h3>" +
         esc(author) +
@@ -364,6 +752,7 @@
     q("[data-page]").innerHTML = screens[s.tab]();
     if (q("[data-filter]")) q("[data-filter]").value = s.filter;
     q("[data-status]").textContent = s.notice;
+    q('[data-action="undo"]').hidden = !s.undo;
   }
   function commit(msg) {
     if (msg) s.notice = msg;
@@ -375,6 +764,7 @@
         " Browser storage is unavailable. Progress lasts for this visit.";
     }
   }
+  const say = (msg) => (q("[data-status]").textContent = msg);
   root.addEventListener("click", (e) => {
     const b = e.target.closest("[data-action]");
     if (!b) return;
@@ -385,17 +775,35 @@
         break;
       case "advance":
         if (s.phase < 2) s.phase++;
+        s.mode = "";
+        s.lookup = "";
+        s.undo = null;
         s.notice = "Shift time updated.";
         break;
       case "tab":
         s.tab = v;
         s.editing = false;
+        s.mode = "";
+        s.lookup = "";
+        break;
+      case "clearlookup":
+        s.lookup = "";
         break;
       case "close":
         s.selected = "";
+        s.mode = "";
         break;
       case "request":
         s.selected = v;
+        s.mode = "";
+        break;
+      case "mode":
+        s.mode = v;
+        break;
+      case "returnfor":
+        s.tab = "Requests";
+        s.selected = v;
+        s.mode = "return";
         break;
       case "new":
         s.editing = true;
@@ -406,13 +814,16 @@
       case "scope":
         s.onlyOpen = v === "0";
         break;
-      case "return": {
-        const l = s.loans.find((l) => l.num === Number(v));
-        if (!l || l.back) return;
-        l.back = true;
-        s.notice = l.asset + " returned to stock. Slip L-" + l.num + " closed.";
+      case "undo":
+        if (!s.undo) return;
+        try {
+          s.loans = JSON.parse(s.undo);
+        } catch {
+          return;
+        }
+        s.undo = null;
+        s.notice = "Return undone. The slips are open again.";
         break;
-      }
     }
     commit();
   });
@@ -421,6 +832,17 @@
       s.filter = e.target.value;
       commit();
     }
+    // A slip defaults to the return time on the approved request.
+    if (e.target.matches('[data-issue] [name="req"]')) {
+      const r = getReq(e.target.value);
+      if (r) e.target.form.elements.due.value = r.due;
+    }
+  });
+  // Picking a suggestion, or typing a full unit ID, opens its slip at once.
+  root.addEventListener("input", (e) => {
+    if (!e.target.matches('[data-lookup] [name="unit"]')) return;
+    const id = unitId(e.target.value);
+    if (getAsset(id) && id !== s.lookup) e.target.form.requestSubmit();
   });
   root.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -433,37 +855,187 @@
       commit("Handover note saved.");
       return;
     }
+    if (f.matches("[data-lookup]")) {
+      const raw = String(form.get("unit") || "").trim();
+      if (!raw) return say("Type the ID printed on the unit’s label.");
+      s.lookup = unitId(raw);
+      const l = out(s.lookup);
+      commit(
+        l
+          ? "Found slip L-" + l.num + " for " + s.lookup + "."
+          : "No open slip for " + s.lookup + ".",
+      );
+      const by = q('[data-lookup] ~ .found [name="by"]');
+      (by || q('[data-lookup] [name="unit"]')).focus();
+      return;
+    }
+    if (f.matches("[data-kit]")) {
+      const r = getReq(f.dataset.req);
+      const who = form.get("who"),
+        due = form.get("due");
+      if (!r) return;
+      if (!people.includes(who)) return say("Choose who is collecting.");
+      if (!Object.hasOwn(dueAt, due)) return say("Choose a return time.");
+      const picks = kit(r)
+        .filter((x) => !x.loan)
+        .map((x, i) => [x, getAsset(form.get("unit" + i))])
+        .filter(([, a]) => a);
+      if (!picks.length) return say("Choose at least one unit to issue.");
+      if (picks.some(([x, a]) => a.type !== x.type || a.repair || out(a.id)))
+        return say("One of those units is no longer available.");
+      s.undo = null;
+      const slips = picks.map(([, a]) => "L-" + issue(r.id, a.id, who, due));
+      s.mode = "";
+      commit(
+        "Issued " +
+          picks.map(([, a]) => a.id).join(", ") +
+          " to " +
+          who +
+          " on slips " +
+          slips.join(", ") +
+          ". Due " +
+          due +
+          ".",
+      );
+      return;
+    }
+    if (f.matches("[data-return]")) {
+      const r = getReq(f.dataset.req);
+      if (!r) return;
+      const open = reqLoans(r.id).filter((l) => !l.back);
+      const ticked = form.getAll("back").map(Number);
+      const by = form.get("by");
+      if (ticked.length && !people.includes(by))
+        return say("Choose who is returning the units.");
+      const before = JSON.stringify(s.loans);
+      const returned = [],
+        moved = [];
+      for (const l of open) {
+        if (ticked.includes(l.num)) {
+          l.back = true;
+          l.returnedAt = shifts[s.phase].time;
+          l.returnedBy = by;
+          l.log.push({
+            ...stamp(),
+            kind: "returned",
+            via: f.dataset.via,
+            text:
+              l.asset +
+              " returned by " +
+              by +
+              (f.dataset.via === "unit" ? ", matched by unit ID" : "") +
+              ". Slip L-" +
+              l.num +
+              " closed.",
+          });
+          returned.push(l.asset);
+          continue;
+        }
+        const w = form.get("with-" + l.num),
+          exp = form.get("exp-" + l.num) || "";
+        if (!people.includes(w)) continue;
+        if (w === l.holder && exp === (l.expected || "")) continue;
+        const from = l.holder;
+        l.holder = w;
+        if (exp) l.expected = exp;
+        else delete l.expected;
+        const a = getAsset(l.asset);
+        const text =
+          l.asset +
+          " (" +
+          a.type +
+          ", " +
+          a.model +
+          ") is with " +
+          w +
+          (w !== from ? ", not " + from : "") +
+          (exp ? ". Expected back " + exp : "") +
+          ". Due " +
+          l.due +
+          ".";
+        l.log.push({ ...stamp(), kind: "transfer", text });
+        moved.push(l.asset + " now with " + w + (exp ? ", expected " + exp : ""));
+      }
+      if (!returned.length && !moved.length)
+        return say(
+          "Nothing changed. Tick a unit on the counter or update who has it.",
+        );
+      s.undo = before;
+      s.mode = "";
+      s.lookup = "";
+      commit(
+        [
+          returned.length
+            ? "Returned " + returned.join(", ") + " to stock."
+            : "",
+          moved.length ? moved.join("; ") + "." : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      return;
+    }
     if (!f.matches("[data-issue]")) return;
     const [req, asset, who, due] = ["req", "asset", "who", "due"].map((k) =>
       form.get(k),
     );
     const unit = getAsset(asset),
       r = getReq(req);
-    if (!r || !unit || unit.repair || out(asset) || !people.includes(who))
-      return;
-    if (!r.items.includes(unit.type)) {
-      q("[data-status]").textContent =
-        "This equipment type is outside the approved request. Choose an approved unit.";
-      return;
-    }
+    if (
+      !r ||
+      !unit ||
+      unit.repair ||
+      out(asset) ||
+      !people.includes(who) ||
+      !Object.hasOwn(dueAt, due)
+    )
+      return say("Fill in every field to save the slip.");
+    if (!r.items.includes(unit.type))
+      return say(
+        "This equipment type is outside the approved request. Choose an approved unit.",
+      );
     if (
       s.loans.some(
         (l) => l.req === req && !l.back && getAsset(l.asset).type === unit.type,
       )
-    ) {
-      q("[data-status]").textContent =
-        "The approved quantity of this equipment type is already on loan.";
-      return;
-    }
-    const num = Math.max(...s.loans.map((l) => l.num)) + 1;
-    s.loans.push({ num, req, asset, who, due, back: false });
+    )
+      return say("The approved quantity of this equipment type is already on loan.");
+    s.undo = null;
+    const num = issue(req, asset, who, due);
     s.editing = false;
     commit("Issued " + asset + " to " + who + " on slip L-" + num + ".");
   });
+  // Saved shifts from version 1 have no holder or history; carry them forward.
+  function migrate(d) {
+    if (!d || d.version !== 1 || !Array.isArray(d.loans)) return d;
+    return {
+      ...d,
+      version: 2,
+      mode: "",
+      undo: null,
+      loans: d.loans.map((l) => ({
+        ...l,
+        holder: l.who,
+        log: [
+          {
+            at: "Earlier",
+            t: 15,
+            kind: "issued",
+            text: "Issued to " + l.who + ". Due " + l.due + ".",
+          },
+        ].concat(
+          l.back
+            ? [{ at: "Earlier", t: 15, kind: "returned", text: l.asset + " returned." }]
+            : [],
+        ),
+      })),
+    };
+  }
   function restore(d) {
+    d = migrate(d);
     if (
       !d ||
-      d.version !== 1 ||
+      d.version !== 2 ||
       !Object.hasOwn(screens, d.tab) ||
       !shifts[d.phase] ||
       (d.selected && !getReq(d.selected)) ||
@@ -475,14 +1047,22 @@
       !d.loans.length ||
       !d.loans.every(
         (l) =>
-          l && getReq(l.req) && getAsset(l.asset) && Number.isInteger(l.num),
-      )
+          l &&
+          getReq(l.req) &&
+          getAsset(l.asset) &&
+          Number.isInteger(l.num) &&
+          people.includes(l.holder) &&
+          Object.hasOwn(dueAt, l.due) &&
+          Array.isArray(l.log),
+      ) ||
+      (d.undo != null && typeof d.undo !== "string") ||
+      (d.lookup != null && typeof d.lookup !== "string")
     )
       return;
     s = {
       ...original(),
       ...d,
-      loans: d.loans.map((l) => ({ ...l })),
+      loans: d.loans.map((l) => ({ ...l, log: l.log.map((e) => ({ ...e })) })),
       notes: d.notes.map((n) => ({ ...n })),
     };
     paint();

@@ -323,6 +323,117 @@ body > main {
   font-size: 12px;
   background: transparent;
 }
+#campus-stores .warn {
+  background: var(--memo);
+  color: var(--mark);
+  font-weight: 600;
+}
+#campus-stores .kithead {
+  margin: 18px 0 4px;
+}
+#campus-stores .panel {
+  margin-top: 14px;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+#campus-stores .panel > small {
+  display: block;
+  margin-top: 2px;
+}
+#campus-stores fieldset.unit {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 10px 0 0;
+  padding: 10px 0 0;
+}
+#campus-stores .check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  cursor: pointer;
+}
+#campus-stores .check input {
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+}
+#campus-stores .check small {
+  display: block;
+}
+#campus-stores .stillwith {
+  margin: 8px 0 0 30px;
+}
+#campus-stores fieldset.unit:has(input:checked) .stillwith {
+  display: none;
+}
+#campus-stores .slipside {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+#campus-stores .history summary {
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 3px;
+}
+#campus-stores .history ol {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+#campus-stores .lookup {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+#campus-stores .lookup label {
+  flex: 1 1 220px;
+  font-size: 13px;
+  font-weight: 600;
+}
+#campus-stores .lookup label span {
+  margin-bottom: 3px;
+}
+#campus-stores .lookup input {
+  width: 100%;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+#campus-stores .lookup input::placeholder {
+  text-transform: none;
+  letter-spacing: 0;
+}
+#campus-stores .alert {
+  margin: 10px 0;
+  padding: 10px 12px;
+  background: var(--memo);
+  color: var(--memotxt);
+  border-left: 3px solid var(--mark);
+}
+#campus-stores .found {
+  margin: 10px 0;
+  padding: 12px 13px 2px;
+  background: var(--desk);
+  border-left: 3px solid var(--sel);
+}
+#campus-stores .found p {
+  margin-top: 4px;
+}
+#campus-stores .found .panel {
+  border: 0;
+  padding: 0;
+  margin-top: 4px;
+}
+#campus-stores .record.auto {
+  border-left-color: var(--mark);
+}
 @container (max-width:650px) {
   #campus-stores .shell {
     grid-template-columns: minmax(0, 1fr);
